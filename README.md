@@ -207,7 +207,7 @@ local upload paths.
 
 ## Streamlit Community Cloud deployment
 
-The hosted entry point is `app.py` on Python 3.11. The Community Cloud environment cannot reach a
+The hosted entry point is `app.py` on Python 3.11 (also declared in `.python-version`). The Community Cloud environment cannot reach a
 developer laptop's Ollama server, so hosted inference must use an explicitly configured remote
 provider. The current supported hosted provider is Mistral; cloud transfer is disclosed in the UI.
 Do not upload real applicant data to this mentor-evaluation prototype.
@@ -218,6 +218,9 @@ Do not upload real applicant data to this mentor-evaluation prototype.
    placeholder key with a real key. Secrets must be entered in the Streamlit settings, never added
    to Git.
 4. Deploy, open the generated URL, and test only with clearly synthetic documents.
+
+Linux OCR uses the `tesseract-ocr` system package declared in `packages.txt` through PyMuPDF's
+OCR integration. This avoids importing platform-specific OpenCV/ONNX binaries during app startup.
 
 Community Cloud storage is ephemeral. Browser sessions use separate randomly named temporary
 directories and SQLite databases, and **New application / reset** removes that session workspace.

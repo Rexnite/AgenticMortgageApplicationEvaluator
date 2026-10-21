@@ -1,18 +1,12 @@
 from pathlib import Path
-import io
 import logging
 
 import pymupdf as fitz
-import numpy as np
-from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
 
 from models.extraction import ExtractionResult
 
 
 class OCRExtractor:
-
-    _engine = RapidOCR()
 
     @classmethod
     def extract(cls, file_path: Path):
@@ -28,23 +22,17 @@ class OCRExtractor:
 
             logger.debug("ocr_page_started", extra={"page_number": page_number + 1})
 
-            pix = page.get_pixmap(dpi=300)
-
-            image = Image.open(
-                io.BytesIO(
-                    pix.tobytes("png")
-                )
-            )
-
-            result, _ = cls._engine(np.array(image))
-
-            page_text = ""
-
-            if result:
-                for line in result:
-                    page_text += line[1] + "\n"
-
-            extracted_pages.append(page_text)
+            try:
+                text_page = page.get_textpage_ocr(dpi=300, full=True)
+                extracted_pages.append(page.get_text(textpage=text_page))
+            except RuntimeError as exc:
+                logger.warning("ocr_page_failed", extra={
+                    "page_number": page_number + 1,
+                    "error_kind": type(exc).__name__,
+                })
+                raise RuntimeError(
+                    "OCR_UNAVAILABLE: Tesseract OCR is not installed or could not process the document"
+                ) from exc
 
         doc.close()
 
