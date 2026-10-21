@@ -13,7 +13,7 @@ import streamlit as st
 
 from core.llm import (
     GeminiLLMProvider, LLMClient, LocalLLMProvider, LocalModelUnavailable,
-    MistralLLMProvider,
+    MistralLLMProvider, OpenAILLMProvider,
 )
 from core.logging import configure_logging
 from models.workflow import HumanReviewDecision, ReviewDecision, WorkflowStatus
@@ -32,6 +32,7 @@ LOGGER = logging.getLogger("mortgage.ui")
 def configure_secrets() -> None:
     """Map supported Streamlit secrets to environment variables without logging values."""
     for key in ("LLM_PROVIDER", "MISTRAL_API_KEY", "MISTRAL_MODEL", "GEMINI_API_KEY", "GEMINI_MODEL",
+                "OPENAI_API_KEY", "OPENAI_MODEL",
                 "ALLOW_CLOUD_FALLBACK", "LOCAL_LLM_MODEL", "LOCAL_LLM_BASE_URL"):
         try:
             value = st.secrets.get(key)
@@ -54,7 +55,9 @@ def service():
     api_key = st.session_state.get("user_provider_api_key", "").strip()
     provider_name = st.session_state.get("user_provider", "Gemini")
     if api_key:
-        provider = GeminiLLMProvider(api_key=api_key) if provider_name == "Gemini" else MistralLLMProvider(api_key=api_key)
+        provider_types = {"Gemini": GeminiLLMProvider, "Mistral": MistralLLMProvider,
+                          "OpenAI": OpenAILLMProvider}
+        provider = provider_types[provider_name](api_key=api_key)
         llm = LLMClient(provider=provider)
     else:
         llm = None
@@ -78,7 +81,7 @@ def resume_from_folder(application_id: str, folder: Path):
 
 def provider_panel() -> bool:
     provider_name = st.sidebar.selectbox(
-        "Model provider", ["Gemini", "Mistral"], key="user_provider",
+        "Model provider", ["Gemini", "OpenAI", "Mistral"], key="user_provider",
         help="Choose the cloud provider associated with your API key.")
     user_key = st.sidebar.text_input(
         f"Your {provider_name} API key",
@@ -88,8 +91,9 @@ def provider_panel() -> bool:
         placeholder="Enter a key to enable underwriting",
     ).strip()
     if user_key:
-        model = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash") if provider_name == "Gemini"
-                 else os.getenv("MISTRAL_MODEL", "mistral-medium-latest"))
+        model = {"Gemini": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                 "OpenAI": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                 "Mistral": os.getenv("MISTRAL_MODEL", "mistral-medium-latest")}[provider_name]
         st.sidebar.write(f"**Provider:** {provider_name} (your session key)")
         st.sidebar.write(f"**Configured model:** {model}")
         st.sidebar.write("**Server:** Ready to authenticate on submission")
@@ -324,7 +328,7 @@ def main() -> None:
              "Accepted formats: PDF, PNG, JPG/JPEG; maximum 15 MB each and 20 files per run.")
     st.caption("Use synthetic data for this hosted prototype. Community Cloud storage is temporary and is not a records system.")
     if not provider_available:
-        st.warning("Choose Gemini or Mistral and enter your own API key in the sidebar to enable Run Underwriting. The key stays in this browser session and is not persisted by the app.")
+        st.warning("Choose Gemini, OpenAI, or Mistral and enter your own API key in the sidebar to enable Run Underwriting. The key stays in this browser session and is not persisted by the app.")
     uploads = st.file_uploader("Upload applicant documents", type=["pdf", "png", "jpg", "jpeg"],
         accept_multiple_files=True, key="uploads")
 

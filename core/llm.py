@@ -55,6 +55,27 @@ def _parse_json(raw: str, response_model: Any = None) -> Any:
     return TypeAdapter(response_model).validate_python(parsed) if response_model is not None else parsed
 
 
+def _openai_strict_schema(response_model: Any) -> dict:
+    """Convert Pydantic JSON Schema to OpenAI's strict object-schema form."""
+    schema = TypeAdapter(response_model).json_schema()
+
+    def normalize(value):
+        if isinstance(value, dict):
+            value.pop("default", None)
+            if value.get("type") == "object" or "properties" in value:
+                properties = value.get("properties", {})
+                value["additionalProperties"] = False
+                value["required"] = list(properties)
+            for child in value.values():
+                normalize(child)
+        elif isinstance(value, list):
+            for child in value:
+                normalize(child)
+
+    normalize(schema)
+    return schema
+
+
 class LocalLLMProvider:
     """Ollama /api/chat adapter using only the Python standard library."""
 
@@ -224,17 +245,73 @@ class GeminiLLMProvider:
         return _parse_json(self._request(system_prompt, user_prompt, response_model), response_model)
 
 
+class OpenAILLMProvider:
+    """OpenAI Chat Completions adapter with native Structured Outputs."""
+
+    def __init__(self, api_key: str | None = None, model: str | None = None,
+                 timeout: float = 120, sleep_fn=time.sleep):
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.timeout = timeout
+        self.sleep_fn = sleep_fn
+
+    def _request(self, system_prompt: str, user_prompt: str,
+                 response_model: Any = None) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": [{"role": "system", "content": system_prompt},
+                         {"role": "user", "content": user_prompt}],
+        }
+        if response_model is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "mortgage_agent_result",
+                    "strict": True,
+                    "schema": _openai_strict_schema(response_model),
+                },
+            }
+        request = Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+        )
+
+        def send():
+            with urlopen(request, timeout=self.timeout) as response:
+                return json.load(response)
+
+        result = _with_retries("OpenAI", send, self.sleep_fn)
+        try:
+            message = result["choices"][0]["message"]
+            if message.get("refusal"):
+                raise ModelProviderError("OpenAI declined to produce the requested structured assessment.")
+            return message["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelProviderError("OpenAI returned no usable response content.") from exc
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        return self._request(system_prompt, user_prompt)
+
+    def generate_structured(self, system_prompt: str, user_prompt: str,
+                            response_model: Any = None) -> Any:
+        return _parse_json(self._request(system_prompt, user_prompt, response_model), response_model)
+
+
 class LLMClient:
     """Compatibility facade for existing agents; local inference is the default."""
 
     def __init__(self, provider: LLMProvider | None = None,
                  cloud_provider: LLMProvider | None = None):
         selection = os.getenv("LLM_PROVIDER", "local").casefold()
-        if selection not in {"local", "mistral", "gemini"}:
-            raise ValueError("LLM_PROVIDER must be 'local', 'mistral', or 'gemini'")
-        if selection in {"mistral", "gemini"} and os.getenv("ALLOW_CLOUD_FALLBACK", "false").casefold() != "true":
+        if selection not in {"local", "mistral", "gemini", "openai"}:
+            raise ValueError("LLM_PROVIDER must be 'local', 'mistral', 'gemini', or 'openai'")
+        if selection in {"mistral", "gemini", "openai"} and os.getenv("ALLOW_CLOUD_FALLBACK", "false").casefold() != "true":
             raise ValueError("Cloud model use requires ALLOW_CLOUD_FALLBACK=true")
-        cloud = GeminiLLMProvider if selection == "gemini" else MistralLLMProvider
+        cloud = {"gemini": GeminiLLMProvider, "openai": OpenAILLMProvider}.get(selection, MistralLLMProvider)
         self.provider = provider or (LocalLLMProvider() if selection == "local" else cloud())
         self.cloud_provider = cloud_provider
         self.allow_cloud_fallback = os.getenv("ALLOW_CLOUD_FALLBACK", "false").casefold() == "true"
@@ -243,7 +320,8 @@ class LLMClient:
         try:
             return getattr(self.provider, method)(*args)
         except (LocalModelUnavailable, StructuredOutputError, ModelProviderError):
-            if not self.allow_cloud_fallback or isinstance(self.provider, (MistralLLMProvider, GeminiLLMProvider)):
+            if not self.allow_cloud_fallback or isinstance(
+                    self.provider, (MistralLLMProvider, GeminiLLMProvider, OpenAILLMProvider)):
                 raise
             LOGGER.warning("cloud_fallback_used")
             cloud = self.cloud_provider or MistralLLMProvider()

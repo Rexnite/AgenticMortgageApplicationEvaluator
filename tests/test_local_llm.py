@@ -3,10 +3,11 @@ from io import BytesIO
 from urllib.error import HTTPError
 
 import pytest
+from pydantic import BaseModel
 
 from core.llm import (
     GeminiLLMProvider, LLMClient, LocalLLMProvider, LocalModelUnavailable,
-    MistralLLMProvider, ProviderRateLimitError, StructuredOutputError,
+    MistralLLMProvider, OpenAILLMProvider, ProviderRateLimitError, StructuredOutputError,
 )
 from models.identity import IdentityVerification
 from agents.identity import IdentityVerificationAgent
@@ -17,6 +18,10 @@ from workflow.state import MortgageState
 from workflow.graph import MortgageWorkflow
 from tests.test_workflow import fake_agents
 from models.workflow import ErrorCategory
+
+
+class SimpleStructuredResult(BaseModel):
+    verified: bool
 
 
 def test_default_provider_is_local_without_cloud_key(monkeypatch):
@@ -154,8 +159,8 @@ def test_gemini_structured_output_uses_schema_and_api_key_header(monkeypatch):
         return FakeHTTPResponse({"candidates": [{"content": {"parts": [{"text": '{"verified": true}'}]}}]})
     monkeypatch.setattr("core.llm.urlopen", fake_urlopen)
     provider = GeminiLLMProvider(api_key="session-secret", model="gemini-test")
-    result = provider.generate_structured("system", "user")
-    assert result == {"verified": True}
+    result = provider.generate_structured("system", "user", SimpleStructuredResult)
+    assert result.verified is True
     assert captured["request"].headers["X-goog-api-key"] == "session-secret"
     assert "session-secret" not in captured["request"].full_url
 
@@ -198,3 +203,33 @@ def test_provider_failure_routes_as_llm_error_before_missing_documents():
     assert state.errors[0].category == ErrorCategory.LLM_FAILURE
     assert state.human_review.reason == "Workflow execution failed"
     assert "Gemini rate limit" in state.human_review.uncertain_checks[0]
+
+
+def test_openai_structured_output_uses_strict_schema_and_bearer_key(monkeypatch):
+    captured = {}
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["payload"] = json.loads(request.data)
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"verified": true}'}}]})
+    monkeypatch.setattr("core.llm.urlopen", fake_urlopen)
+    provider = OpenAILLMProvider(api_key="session-secret", model="gpt-test")
+    result = provider.generate_structured("system", "user", SimpleStructuredResult)
+    assert result.verified is True
+    assert captured["request"].headers["Authorization"] == "Bearer session-secret"
+    assert "session-secret" not in captured["request"].full_url
+    response_format = captured["payload"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+
+
+def test_openai_rate_limit_retries_then_returns_safe_error(monkeypatch):
+    calls = []
+    def rate_limited(*_args, **_kwargs):
+        calls.append(1)
+        raise HTTPError("https://api.openai.com", 429, "Too Many Requests", {}, None)
+    monkeypatch.setattr("core.llm.urlopen", rate_limited)
+    provider = OpenAILLMProvider(api_key="secret", sleep_fn=lambda _delay: None)
+    with pytest.raises(ProviderRateLimitError, match="OpenAI rate limit") as failure:
+        provider.generate("system", "user")
+    assert len(calls) == 3
+    assert "secret" not in str(failure.value)
