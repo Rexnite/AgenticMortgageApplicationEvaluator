@@ -44,16 +44,16 @@ POLICY_AGENTS = {"policy", "policy_summary"}
 class MortgageWorkflow:
     """Conditional LangGraph orchestration around the existing specialist agents."""
 
-    def __init__(self, agents=None, required_documents=None, checkpointer=None):
+    def __init__(self, agents=None, required_documents=None, checkpointer=None, llm=None):
         defaults = {
-            "document": DocumentAgent(), "passport": PassportAgent(),
-            "employment": EmploymentAgent(), "payslip": PayslipAgent(),
-            "bank_statement": BankStatementAgent(), "ownership": DocumentOwnershipAgent(),
-            "identity": IdentityVerificationAgent(), "employment_verification": EmploymentVerificationAgent(),
-            "income": IncomeVerificationAgent(), "bank": BankVerificationAgent(),
-            "fraud": FraudAssessmentAgent(), "affordability": AffordabilityAgent(),
-            "policy": PolicyAssessmentAgent(), "policy_summary": PolicyAssessmentSummaryAgent(),
-            "reflection": ReflectionAgent(), "underwriter": UnderwriterAgent(),
+            "document": DocumentAgent(llm=llm), "passport": PassportAgent(llm=llm),
+            "employment": EmploymentAgent(llm=llm), "payslip": PayslipAgent(llm=llm),
+            "bank_statement": BankStatementAgent(llm=llm), "ownership": DocumentOwnershipAgent(llm=llm),
+            "identity": IdentityVerificationAgent(llm=llm), "employment_verification": EmploymentVerificationAgent(llm=llm),
+            "income": IncomeVerificationAgent(llm=llm), "bank": BankVerificationAgent(llm=llm),
+            "fraud": FraudAssessmentAgent(llm=llm), "affordability": AffordabilityAgent(llm=llm),
+            "policy": PolicyAssessmentAgent(llm=llm), "policy_summary": PolicyAssessmentSummaryAgent(llm=llm),
+            "reflection": ReflectionAgent(llm=llm), "underwriter": UnderwriterAgent(llm=llm),
         }
         defaults.update(agents or {})
         self.agents = defaults

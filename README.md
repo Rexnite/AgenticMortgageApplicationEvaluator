@@ -229,6 +229,12 @@ regulated mortgage processing. If the app is shared publicly, anyone with the UR
 submit documents and consume configured provider quota; prefer private/limited sharing where the
 account supports it.
 
+The hosted UI also supports bring-your-own-key operation. A user can enter a Mistral API key in
+the password field in the sidebar. The key is passed directly to that browser session's agent
+instances; it is never copied into process-wide environment variables, SQLite checkpoints,
+application logs, downloads, or Git. Resetting the application clears the widget/session value.
+Mistral usage and charges belong to the key owner.
+
 ## Persistent workflow lifecycle
 
 `PersistentMortgageWorkflow` compiles the same graph with LangGraph's official SQLite

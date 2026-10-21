@@ -34,14 +34,14 @@ class PersistentMortgageWorkflow:
     """Service API for starting, inspecting, reviewing, and resuming workflows."""
 
     def __init__(self, db_path: str | Path | None = None, *, agents=None,
-            required_documents=None):
+            required_documents=None, llm=None):
         self.db_path = Path(db_path or os.getenv("WORKFLOW_DB_PATH", ".data/workflows.db"))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._audit_connection = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.checkpointer = SqliteSaver(self._checkpoint_connection)
         self.workflow = MortgageWorkflow(agents=agents, required_documents=required_documents,
-            checkpointer=self.checkpointer)
+            checkpointer=self.checkpointer, llm=llm)
         # A placeholder folder is sufficient for checkpoint inspection and interrupt resume;
         # intake is not re-executed on review decisions.
         self.workflow.graph = self.workflow.build_graph(Path("."))

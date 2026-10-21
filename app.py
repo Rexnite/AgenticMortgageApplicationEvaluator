@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from core.llm import LLMClient, LocalLLMProvider, LocalModelUnavailable
+from core.llm import LLMClient, LocalLLMProvider, LocalModelUnavailable, MistralLLMProvider
 from core.logging import configure_logging
 from models.workflow import HumanReviewDecision, ReviewDecision, WorkflowStatus
 from services.workflow_persistence import (
@@ -48,7 +48,9 @@ def session_workspace() -> Path:
 
 
 def service():
-    return PersistentMortgageWorkflow(db_path=session_workspace() / "workflows.db")
+    api_key = st.session_state.get("user_mistral_api_key", "").strip()
+    llm = LLMClient(provider=MistralLLMProvider(api_key=api_key)) if api_key else None
+    return PersistentMortgageWorkflow(db_path=session_workspace() / "workflows.db", llm=llm)
 
 
 def save_uploads(uploaded_files, folder: Path) -> None:
@@ -66,7 +68,21 @@ def resume_from_folder(application_id: str, folder: Path):
         return workflow.resume(application_id, folder)
 
 
-def provider_panel() -> None:
+def provider_panel() -> bool:
+    user_key = st.sidebar.text_input(
+        "Your Mistral API key",
+        type="password",
+        key="user_mistral_api_key",
+        help="Used only for this browser session. It is not written to the workflow database, logs, or repository.",
+        placeholder="Enter a key to enable underwriting",
+    ).strip()
+    if user_key:
+        st.sidebar.write("**Provider:** Mistral (your session key)")
+        st.sidebar.write(f"**Configured model:** {os.getenv('MISTRAL_MODEL', 'mistral-medium-latest')}")
+        st.sidebar.write("**Server:** Ready to authenticate on submission")
+        st.sidebar.warning("Uploaded document text will be sent to Mistral. Usage is charged to the key you entered.")
+        return True
+
     selection = os.getenv("LLM_PROVIDER", "local").casefold()
     fallback = os.getenv("ALLOW_CLOUD_FALLBACK", "false").casefold() == "true"
     st.sidebar.write(f"**Provider:** {'Ollama' if selection == 'local' else selection.title()}")
@@ -260,7 +276,7 @@ def reset_application() -> None:
     workspace = st.session_state.get("workspace")
     if workspace:
         shutil.rmtree(workspace, ignore_errors=True)
-    for key in ("workspace", "state", "uploads", "is_running"):
+    for key in ("workspace", "state", "uploads", "is_running", "user_mistral_api_key"):
         st.session_state.pop(key, None)
 
 
@@ -292,6 +308,8 @@ def main() -> None:
     st.write("Upload a passport, employment letter, payslip(s), and bank statement(s). "
              "Accepted formats: PDF, PNG, JPG/JPEG; maximum 15 MB each and 20 files per run.")
     st.caption("Use synthetic data for this hosted prototype. Community Cloud storage is temporary and is not a records system.")
+    if not provider_available:
+        st.warning("Enter your own Mistral API key in the sidebar to enable Run Underwriting. The key stays in this browser session and is not persisted by the app.")
     uploads = st.file_uploader("Upload applicant documents", type=["pdf", "png", "jpg", "jpeg"],
         accept_multiple_files=True, key="uploads")
 

@@ -84,6 +84,13 @@ def test_happy_path_reaches_final_underwriter():
     assert state.human_review is None
 
 
+def test_workflow_injects_one_session_scoped_llm_into_default_agents():
+    sentinel = object()
+    workflow = MortgageWorkflow(llm=sentinel)
+    assert workflow.agents
+    assert all(agent._llm is sentinel for agent in workflow.agents.values())
+
+
 @pytest.mark.parametrize("kwargs,expected,status", [
     ({"complete": False}, "Required documents are missing", "REQUEST_MORE_INFORMATION"),
     ({"fraud": 80}, "Policy rules require referral", "PENDING_REVIEW"),
