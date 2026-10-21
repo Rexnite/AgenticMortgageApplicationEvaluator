@@ -11,7 +11,10 @@ from uuid import uuid4
 
 import streamlit as st
 
-from core.llm import LLMClient, LocalLLMProvider, LocalModelUnavailable, MistralLLMProvider
+from core.llm import (
+    GeminiLLMProvider, LLMClient, LocalLLMProvider, LocalModelUnavailable,
+    MistralLLMProvider,
+)
 from core.logging import configure_logging
 from models.workflow import HumanReviewDecision, ReviewDecision, WorkflowStatus
 from services.workflow_persistence import (
@@ -28,7 +31,7 @@ LOGGER = logging.getLogger("mortgage.ui")
 
 def configure_secrets() -> None:
     """Map supported Streamlit secrets to environment variables without logging values."""
-    for key in ("LLM_PROVIDER", "MISTRAL_API_KEY", "MISTRAL_MODEL",
+    for key in ("LLM_PROVIDER", "MISTRAL_API_KEY", "MISTRAL_MODEL", "GEMINI_API_KEY", "GEMINI_MODEL",
                 "ALLOW_CLOUD_FALLBACK", "LOCAL_LLM_MODEL", "LOCAL_LLM_BASE_URL"):
         try:
             value = st.secrets.get(key)
@@ -48,8 +51,13 @@ def session_workspace() -> Path:
 
 
 def service():
-    api_key = st.session_state.get("user_mistral_api_key", "").strip()
-    llm = LLMClient(provider=MistralLLMProvider(api_key=api_key)) if api_key else None
+    api_key = st.session_state.get("user_provider_api_key", "").strip()
+    provider_name = st.session_state.get("user_provider", "Gemini")
+    if api_key:
+        provider = GeminiLLMProvider(api_key=api_key) if provider_name == "Gemini" else MistralLLMProvider(api_key=api_key)
+        llm = LLMClient(provider=provider)
+    else:
+        llm = None
     return PersistentMortgageWorkflow(db_path=session_workspace() / "workflows.db", llm=llm)
 
 
@@ -69,18 +77,23 @@ def resume_from_folder(application_id: str, folder: Path):
 
 
 def provider_panel() -> bool:
+    provider_name = st.sidebar.selectbox(
+        "Model provider", ["Gemini", "Mistral"], key="user_provider",
+        help="Choose the cloud provider associated with your API key.")
     user_key = st.sidebar.text_input(
-        "Your Mistral API key",
+        f"Your {provider_name} API key",
         type="password",
-        key="user_mistral_api_key",
+        key="user_provider_api_key",
         help="Used only for this browser session. It is not written to the workflow database, logs, or repository.",
         placeholder="Enter a key to enable underwriting",
     ).strip()
     if user_key:
-        st.sidebar.write("**Provider:** Mistral (your session key)")
-        st.sidebar.write(f"**Configured model:** {os.getenv('MISTRAL_MODEL', 'mistral-medium-latest')}")
+        model = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash") if provider_name == "Gemini"
+                 else os.getenv("MISTRAL_MODEL", "mistral-medium-latest"))
+        st.sidebar.write(f"**Provider:** {provider_name} (your session key)")
+        st.sidebar.write(f"**Configured model:** {model}")
         st.sidebar.write("**Server:** Ready to authenticate on submission")
-        st.sidebar.warning("Uploaded document text will be sent to Mistral. Usage is charged to the key you entered.")
+        st.sidebar.warning(f"Uploaded document text will be sent to {provider_name}. Usage and quota apply to the key you entered.")
         return True
 
     selection = os.getenv("LLM_PROVIDER", "local").casefold()
@@ -258,6 +271,8 @@ def render_history(state) -> None:
 
 def render_state(state) -> None:
     render_metrics(state)
+    for error in state.errors:
+        st.error(f"{error.stage} — {error.message}")
     if state.workflow_status in {WorkflowStatus.AWAITING_REVIEW, WorkflowStatus.AWAITING_INFORMATION}:
         st.warning("The workflow detected incomplete or inconsistent evidence and referred the case for review.")
     st.subheader("Workflow Progress")
@@ -276,7 +291,7 @@ def reset_application() -> None:
     workspace = st.session_state.get("workspace")
     if workspace:
         shutil.rmtree(workspace, ignore_errors=True)
-    for key in ("workspace", "state", "uploads", "is_running", "user_mistral_api_key"):
+    for key in ("workspace", "state", "uploads", "is_running", "user_provider", "user_provider_api_key"):
         st.session_state.pop(key, None)
 
 
@@ -309,7 +324,7 @@ def main() -> None:
              "Accepted formats: PDF, PNG, JPG/JPEG; maximum 15 MB each and 20 files per run.")
     st.caption("Use synthetic data for this hosted prototype. Community Cloud storage is temporary and is not a records system.")
     if not provider_available:
-        st.warning("Enter your own Mistral API key in the sidebar to enable Run Underwriting. The key stays in this browser session and is not persisted by the app.")
+        st.warning("Choose Gemini or Mistral and enter your own API key in the sidebar to enable Run Underwriting. The key stays in this browser session and is not persisted by the app.")
     uploads = st.file_uploader("Upload applicant documents", type=["pdf", "png", "jpg", "jpeg"],
         accept_multiple_files=True, key="uploads")
 

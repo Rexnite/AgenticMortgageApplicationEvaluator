@@ -24,7 +24,7 @@ from agents.policy_engine import PolicyAssessmentAgent
 from agents.reflection import ReflectionAgent
 from agents.underwriter import UnderwriterAgent
 from core.logging import state_summary
-from core.llm import LocalModelUnavailable, StructuredOutputError
+from core.llm import LocalModelUnavailable, ModelProviderError, StructuredOutputError
 from services.checks import build_check_results
 from models.underwriting import UnderwritingDecision
 from models.workflow import (
@@ -90,7 +90,7 @@ class MortgageWorkflow:
 
     @staticmethod
     def _classify_error(exc, agent_name):
-        if isinstance(exc, LocalModelUnavailable):
+        if isinstance(exc, (LocalModelUnavailable, ModelProviderError)):
             return ErrorCategory.LLM_FAILURE, True
         if isinstance(exc, StructuredOutputError):
             return ErrorCategory.SCHEMA_VALIDATION_FAILURE, True
@@ -193,15 +193,15 @@ class MortgageWorkflow:
         missing = self._missing_documents(state)
         missing_evidence = self._missing_extracted_evidence(state) if not missing else []
         status = ReviewStatus.PENDING_REVIEW
-        if missing:
-            reason, uncertain, action = "Required documents are missing", missing, "Request the missing documents"
-            status = ReviewStatus.REQUEST_MORE_INFORMATION
-        elif state.errors:
+        if state.errors:
             reason = "Workflow execution failed"
             uncertain = [f"{error.stage}: {error.message}" for error in state.errors]
             action = "Resolve the error and rerun the affected stage"
             if any(error.category in {ErrorCategory.MISSING_INPUT, ErrorCategory.EXTRACTION_FAILURE} for error in state.errors):
                 status = ReviewStatus.REQUEST_MORE_INFORMATION
+        elif missing:
+            reason, uncertain, action = "Required documents are missing", missing, "Request the missing documents"
+            status = ReviewStatus.REQUEST_MORE_INFORMATION
         elif state.rejected_documents:
             reason, uncertain, action = "Document ownership could not be confirmed", ["One or more documents may belong to another applicant"], "Verify document ownership"
         elif missing_evidence:

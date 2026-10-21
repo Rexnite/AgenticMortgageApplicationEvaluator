@@ -139,9 +139,10 @@ python main.py sample_application
 
 Deterministic Python handles arithmetic, matching, fraud scoring, policy, and routing first.
 Semantic tasks use the local model only where needed; unresolved ambiguity goes to human review.
-For explicit cloud fallback, set `ALLOW_CLOUD_FALLBACK=true` and provide `MISTRAL_API_KEY`.
-With fallback disabled, no cloud provider is instantiated. `LLM_PROVIDER=mistral` also requires
-the explicit opt-in flag. Malformed local structured output gets one repair attempt, then a
+For explicit cloud use, set `ALLOW_CLOUD_FALLBACK=true`, choose `LLM_PROVIDER=gemini` or
+`LLM_PROVIDER=mistral`, and provide the matching `GEMINI_API_KEY` or `MISTRAL_API_KEY`.
+With fallback disabled, no cloud provider is instantiated. Cloud selection requires the explicit
+opt-in flag. Malformed local structured output gets one repair attempt, then a
 structured workflow error rather than an unbounded retry.
 
 ## Unified check results
@@ -209,7 +210,7 @@ local upload paths.
 
 The hosted entry point is `app.py` on Python 3.11 (also declared in `.python-version`). The Community Cloud environment cannot reach a
 developer laptop's Ollama server, so hosted inference must use an explicitly configured remote
-provider. The current supported hosted provider is Mistral; cloud transfer is disclosed in the UI.
+provider. The hosted UI supports Gemini and Mistral; cloud transfer is disclosed in the UI.
 Do not upload real applicant data to this mentor-evaluation prototype.
 
 1. Keep the GitHub repository private and deploy its `main` branch with entry point `app.py`.
@@ -229,11 +230,12 @@ regulated mortgage processing. If the app is shared publicly, anyone with the UR
 submit documents and consume configured provider quota; prefer private/limited sharing where the
 account supports it.
 
-The hosted UI also supports bring-your-own-key operation. A user can enter a Mistral API key in
-the password field in the sidebar. The key is passed directly to that browser session's agent
+The hosted UI uses bring-your-own-key operation. A user selects Gemini or Mistral and enters the
+matching API key in the password field in the sidebar. The key is passed directly to that browser session's agent
 instances; it is never copied into process-wide environment variables, SQLite checkpoints,
 application logs, downloads, or Git. Resetting the application clears the widget/session value.
-Mistral usage and charges belong to the key owner.
+Provider usage, quota, and charges belong to the key owner. HTTP 429 responses receive two bounded
+backoff retries; a continued quota failure is then surfaced explicitly and routed to human review.
 
 ## Persistent workflow lifecycle
 

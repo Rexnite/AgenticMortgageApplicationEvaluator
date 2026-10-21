@@ -1,10 +1,12 @@
 import json
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
 
 from core.llm import (
-    LLMClient, LocalLLMProvider, LocalModelUnavailable,
-    StructuredOutputError,
+    GeminiLLMProvider, LLMClient, LocalLLMProvider, LocalModelUnavailable,
+    MistralLLMProvider, ProviderRateLimitError, StructuredOutputError,
 )
 from models.identity import IdentityVerification
 from agents.identity import IdentityVerificationAgent
@@ -133,3 +135,66 @@ def test_ambiguous_verification_invokes_local_provider(monkeypatch):
     IdentityVerificationAgent(llm=LLMClient(provider=spy)).execute(state)
     assert spy.calls == 1
     assert state.identity.verified is False
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+    def __enter__(self):
+        return BytesIO(json.dumps(self.payload).encode())
+    def __exit__(self, *_args):
+        return False
+
+
+def test_gemini_structured_output_uses_schema_and_api_key_header(monkeypatch):
+    captured = {}
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeHTTPResponse({"candidates": [{"content": {"parts": [{"text": '{"verified": true}'}]}}]})
+    monkeypatch.setattr("core.llm.urlopen", fake_urlopen)
+    provider = GeminiLLMProvider(api_key="session-secret", model="gemini-test")
+    result = provider.generate_structured("system", "user")
+    assert result == {"verified": True}
+    assert captured["request"].headers["X-goog-api-key"] == "session-secret"
+    assert "session-secret" not in captured["request"].full_url
+
+
+def test_gemini_rate_limit_retries_then_returns_safe_error(monkeypatch):
+    calls = []
+    def rate_limited(*_args, **_kwargs):
+        calls.append(1)
+        raise HTTPError("https://example.invalid", 429, "Too Many Requests", {}, None)
+    monkeypatch.setattr("core.llm.urlopen", rate_limited)
+    provider = GeminiLLMProvider(api_key="secret", sleep_fn=lambda _delay: None)
+    with pytest.raises(ProviderRateLimitError, match="after 3 attempts") as failure:
+        provider.generate("system", "user")
+    assert len(calls) == 3
+    assert "secret" not in str(failure.value)
+
+
+def test_mistral_rate_limit_retries_then_returns_safe_error():
+    class RateLimitedChat:
+        calls = 0
+        def complete(self, **_kwargs):
+            self.calls += 1
+            error = RuntimeError("HTTP status 429")
+            error.status_code = 429
+            raise error
+    class FakeClient:
+        chat = RateLimitedChat()
+    provider = MistralLLMProvider(api_key="secret", client=FakeClient(), sleep_fn=lambda _delay: None)
+    with pytest.raises(ProviderRateLimitError, match="Mistral rate limit"):
+        provider.generate("system", "user")
+    assert provider.client.chat.calls == 3
+
+
+def test_provider_failure_routes_as_llm_error_before_missing_documents():
+    agents = fake_agents()
+    def fail(_state):
+        raise ProviderRateLimitError("Gemini rate limit or quota was exceeded after 3 attempts.")
+    agents["document"].function = fail
+    state = MortgageWorkflow(agents=agents).run("unused")
+    assert state.errors[0].category == ErrorCategory.LLM_FAILURE
+    assert state.human_review.reason == "Workflow execution failed"
+    assert "Gemini rate limit" in state.human_review.uncertain_checks[0]
