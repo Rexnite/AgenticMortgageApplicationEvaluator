@@ -17,4 +17,6 @@ page_*.jpg
 *.ppm
 sample_application/
 *.pdf
+/output/
+/tmp/
 .DS_Store
